@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AI Test Helper - Gemini Study
 // @namespace    https://github.com/ai-test-helper
-// @version      3.3.0
+// @version      3.4.0
 // @description  Study helper using Gemini API. Auto-selects answers, caches results, shows confidence. Works on mobile.
 // @author       AI Test Helper
 // @match        *://docs.google.com/forms/*
@@ -24,14 +24,30 @@
 
   const STORE_KEY = 'ath_gf_gemini_config';
   const CACHE_KEY = 'ath_answer_cache';
+
+  // ─── Актуальні моделі Gemini (травень 2025) ───────────────────────────────
+  const GEMINI_MODELS = [
+    { id: 'gemini-2.5-flash-preview-05-20', label: 'Gemini 2.5 Flash Preview (найновіша)' },
+    { id: 'gemini-2.5-flash-lite',          label: 'Gemini 2.5 Flash Lite (швидка)' },
+    { id: 'gemini-2.5-pro-preview-05-06',   label: 'Gemini 2.5 Pro Preview (розумна)' },
+    { id: 'gemini-2.0-flash',               label: 'Gemini 2.0 Flash' },
+    { id: 'gemini-2.0-flash-lite',          label: 'Gemini 2.0 Flash Lite' },
+    { id: 'gemini-1.5-flash',               label: 'Gemini 1.5 Flash' },
+    { id: 'gemini-1.5-flash-8b',            label: 'Gemini 1.5 Flash 8B (найшвидша)' },
+    { id: 'gemini-1.5-pro',                 label: 'Gemini 1.5 Pro' },
+    { id: 'custom',                         label: '✏️ Вписати вручну…' },
+  ];
+  const DEFAULT_MODEL = 'gemini-2.5-flash-lite';
+  const FALLBACK_MODELS = ['gemini-2.5-flash-lite', 'gemini-2.0-flash', 'gemini-2.0-flash-lite'];
+
   const DEFAULT_CONFIG = {
     apiKey: '',
-    model: 'gemini-2.5-flash-lite',
+    model: DEFAULT_MODEL,
+    customModel: '',
     language: 'auto',
     autoSelect: false,
     autoMode: false,
   };
-  const FALLBACK_MODELS = ['gemini-2.5-flash-lite', 'gemini-2.0-flash', 'gemini-2.0-flash-lite'];
   const CACHE_MAX = 500;
 
   let config = loadConfig();
@@ -83,6 +99,11 @@
   function setCached(questionText, answer) {
     answerCache[cacheKey(questionText)] = answer;
     saveCache();
+  }
+
+  function getActiveModel() {
+    if (config.model === 'custom') return (config.customModel || DEFAULT_MODEL).trim();
+    return config.model || DEFAULT_MODEL;
   }
 
   // ─── Styles ───────────────────────────────────────────────────────────────
@@ -226,6 +247,37 @@
       outline: 0;
       font-size: 14px;
     }
+    /* Покращений вигляд select для всіх платформ */
+    .ath-select {
+      appearance: none;
+      -webkit-appearance: none;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1l5 5 5-5' stroke='%2394a3b8' stroke-width='1.5' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");
+      background-repeat: no-repeat;
+      background-position: right 12px center;
+      padding-right: 36px;
+      cursor: pointer;
+    }
+    .ath-select option {
+      background: #1e293b;
+      color: #f8fafc;
+      padding: 8px;
+    }
+    #ath-custom-model-wrap {
+      margin-top: 6px;
+      display: none;
+    }
+    #ath-custom-model-wrap.show { display: block; }
+    .ath-model-badge {
+      display: inline-block;
+      margin-top: 4px;
+      padding: 3px 8px;
+      border-radius: 6px;
+      font-size: 11px;
+      font-weight: 700;
+      background: rgba(79,70,229,.2);
+      color: #a5b4fc;
+      border: 1px solid rgba(79,70,229,.35);
+    }
     .ath-toggle-row {
       display: flex;
       align-items: center;
@@ -355,6 +407,14 @@
         width: 50px;
         height: 50px;
       }
+      .ath-select {
+        font-size: 16px; /* Запобігає авто-зуму на iOS */
+        min-height: 44px;
+      }
+      .ath-input {
+        font-size: 16px;
+        min-height: 44px;
+      }
     }
   `);
 
@@ -376,9 +436,7 @@
 
   function visibleText(node) {
     let t = (node && (node.innerText || node.textContent) || '').trim();
-    // Normalize unicode minus/dash variants to ASCII minus
     t = t.replace(/[−–—]/g, '-');
-    // Collapse whitespace but preserve "- 7" → "-7" for math expressions
     t = t.replace(/(\-|\+|\×|\÷|\*|\/)\s+(\d)/g, '$1$2');
     t = t.replace(/(\d)\s+(\-|\+|\×|\÷|\*|\/)/g, '$1$2');
     t = t.replace(/\s+/g, ' ').trim();
@@ -451,6 +509,7 @@
     const wrap = make('div', {});
     wrap.append(make('div', { className: 'ath-label' }, labelText), control);
     parent.appendChild(wrap);
+    return wrap;
   }
 
   // ─── UI Build ─────────────────────────────────────────────────────────────
@@ -484,7 +543,6 @@
 
     const autoRow = make('div', { className: 'ath-auto-row' });
     autoRow.appendChild(make('span', {}, '⚡ Auto-select answers after analysis'));
-
     const toggleWrap = make('label', { className: 'ath-toggle' });
     const toggleInput = make('input', { id: 'ath-auto-toggle', type: 'checkbox' });
     toggleInput.checked = Boolean(config.autoSelect);
@@ -512,7 +570,10 @@
       make('button', { id: 'ath-clear-cache', className: 'ath-btn danger', type: 'button' }, '🗑 Clear cache')
     );
 
-    main.append(countCard, cacheCard, make('div', { id: 'ath-status', className: 'ath-status' }), autoModeRow, autoRow, btnRow, btnRow2,
+    main.append(
+      countCard, cacheCard,
+      make('div', { id: 'ath-status', className: 'ath-status' }),
+      autoModeRow, autoRow, btnRow, btnRow2,
       make('div', { className: 'ath-muted' }, 'Scans visible questions. Images attached automatically.')
     );
 
@@ -520,24 +581,59 @@
     const answers = make('div', { className: 'ath-body', dataset: { tab: 'answers' } });
     answers.appendChild(make('div', { id: 'ath-results' }));
 
-    // Settings tab
+    // ─── Settings tab ────────────────────────────────────────────────────
     const settings = make('div', { className: 'ath-body', dataset: { tab: 'settings' } });
-    const keyInput = make('input', { id: 'ath-key', className: 'ath-input', type: 'password', placeholder: 'Gemini API key...', autocomplete: 'off', value: config.apiKey || '' });
-    const modelInput = make('input', { id: 'ath-model', className: 'ath-input', type: 'text', value: config.model || 'gemini-2.5-flash-lite' });
+
+    // API Key
+    const keyInput = make('input', {
+      id: 'ath-key', className: 'ath-input', type: 'password',
+      placeholder: 'Вставте Gemini API key...', autocomplete: 'off', value: config.apiKey || ''
+    });
+    addLabeled(settings, 'Gemini API key', keyInput);
+
+    // Model selector dropdown
+    const modelSelect = make('select', { id: 'ath-model-select', className: 'ath-select' });
+    GEMINI_MODELS.forEach(m => {
+      const opt = make('option', { value: m.id }, m.label);
+      modelSelect.appendChild(opt);
+    });
+    // Set current value — if stored model matches a known id, select it; else show custom
+    const knownIds = GEMINI_MODELS.map(m => m.id);
+    if (knownIds.includes(config.model)) {
+      modelSelect.value = config.model;
+    } else {
+      modelSelect.value = 'custom';
+    }
+    addLabeled(settings, 'Модель Gemini', modelSelect);
+
+    // Custom model input (shown only when "custom" selected)
+    const customModelWrap = make('div', { id: 'ath-custom-model-wrap', className: config.model === 'custom' || !knownIds.includes(config.model) ? 'show' : '' });
+    const customModelInput = make('input', {
+      id: 'ath-custom-model', className: 'ath-input', type: 'text',
+      placeholder: 'наприклад: gemini-2.5-pro-exp-03-25',
+      value: config.model === 'custom' ? (config.customModel || '') : (!knownIds.includes(config.model) ? config.model : '')
+    });
+    customModelWrap.append(make('div', { className: 'ath-label' }, 'Своя назва моделі'), customModelInput);
+    settings.appendChild(customModelWrap);
+
+    // Active model badge
+    const modelBadge = make('div', { id: 'ath-model-badge', className: 'ath-model-badge' }, '▶ ' + getActiveModel());
+    settings.appendChild(modelBadge);
+
+    // Language
     const langSelect = make('select', { id: 'ath-lang', className: 'ath-select' });
-    [['auto', 'Same as question'], ['uk', 'Ukrainian'], ['ru', 'Russian'], ['en', 'English']].forEach(([v, l]) => {
+    [['auto', 'Як у питанні (авто)'], ['uk', 'Українська'], ['ru', 'Русский'], ['en', 'English']].forEach(([v, l]) => {
       langSelect.appendChild(make('option', { value: v }, l));
     });
     langSelect.value = config.language || 'auto';
-    addLabeled(settings, 'Gemini API key', keyInput);
-    addLabeled(settings, 'Model', modelInput);
-    addLabeled(settings, 'Response language', langSelect);
-    settings.appendChild(make('button', { id: 'ath-save', className: 'ath-btn', type: 'button' }, '💾 Save settings'));
+    addLabeled(settings, 'Мова відповіді', langSelect);
+
+    settings.appendChild(make('button', { id: 'ath-save', className: 'ath-btn', type: 'button' }, '💾 Зберегти налаштування'));
 
     panel.append(head, tabs, main, answers, settings);
     document.body.appendChild(panel);
 
-    // Events
+    // ─── Events ───────────────────────────────────────────────────────────
     fab.addEventListener('pointerdown', e => {
       e.preventDefault();
       panel.classList.toggle('visible');
@@ -546,12 +642,28 @@
     document.getElementById('ath-close').addEventListener('click', () => panel.classList.remove('visible'));
     panel.querySelectorAll('.ath-tab').forEach(t => t.addEventListener('click', () => switchTab(t.dataset.tab)));
 
+    // Model select change
+    modelSelect.addEventListener('change', () => {
+      const isCustom = modelSelect.value === 'custom';
+      customModelWrap.classList.toggle('show', isCustom);
+      const preview = isCustom
+        ? (customModelInput.value.trim() || '(вкажіть нижче)')
+        : modelSelect.value;
+      document.getElementById('ath-model-badge').textContent = '▶ ' + preview;
+    });
+    customModelInput.addEventListener('input', () => {
+      document.getElementById('ath-model-badge').textContent = '▶ ' + (customModelInput.value.trim() || '(введіть назву)');
+    });
+
     document.getElementById('ath-save').addEventListener('click', () => {
       config.apiKey = document.getElementById('ath-key').value.trim();
-      config.model = document.getElementById('ath-model').value.trim() || 'gemini-2.5-flash-lite';
-      config.language = document.getElementById('ath-lang').value || 'auto';
+      config.model = modelSelect.value;
+      config.customModel = customModelInput.value.trim();
+      config.language = langSelect.value || 'auto';
       saveConfig();
-      setStatus('Settings saved.', 'ok');
+      const activeModel = getActiveModel();
+      document.getElementById('ath-model-badge').textContent = '▶ ' + activeModel;
+      setStatus('✅ Збережено! Модель: ' + activeModel, 'ok');
       switchTab('main');
     });
 
@@ -570,27 +682,27 @@
     document.getElementById('ath-scan').addEventListener('click', scan);
     document.getElementById('ath-analyze').addEventListener('click', analyze);
     document.getElementById('ath-autoselect-btn').addEventListener('click', () => {
-      if (!lastQuestions.length) { setStatus('Run Scan + Analyze first.', 'err'); return; }
+      if (!lastQuestions.length) { setStatus('Спочатку натисніть Scan + Analyze.', 'err'); return; }
       const results = document.getElementById('ath-results');
       const cards = results ? results.querySelectorAll('.ath-card') : [];
-      if (!cards.length) { setStatus('No answers to auto-select yet.', 'err'); return; }
+      if (!cards.length) { setStatus('Ще немає відповідей.', 'err'); return; }
       doAutoSelect();
     });
     document.getElementById('ath-clear-cache').addEventListener('click', () => {
       answerCache = {};
       saveCache();
       document.getElementById('ath-cache-count').textContent = '0';
-      setStatus('Cache cleared.', 'ok');
+      setStatus('Кеш очищено.', 'ok');
     });
   }
 
-  // ─── Question extraction (unchanged logic) ────────────────────────────────
+  // ─── Question extraction ──────────────────────────────────────────────────
   function scan() {
     lastQuestions = getPageQuestions();
     document.getElementById('ath-count').textContent = String(lastQuestions.length);
     setStatus(lastQuestions.length
-      ? 'Questions detected: ' + lastQuestions.length
-      : 'No questions detected. Scroll the form and try again.',
+      ? 'Питань знайдено: ' + lastQuestions.length
+      : 'Питань не знайдено. Прокрутіть сторінку та спробуйте ще.',
       lastQuestions.length ? 'ok' : 'err');
     renderDetectedQuestions(lastQuestions);
     return lastQuestions;
@@ -737,7 +849,7 @@
     const results = document.getElementById('ath-results');
     clear(results);
     if (!questions.length) {
-      results.appendChild(make('div', { className: 'ath-card ath-muted' }, 'No detected questions yet.'));
+      results.appendChild(make('div', { className: 'ath-card ath-muted' }, 'Питань ще не виявлено.'));
       return;
     }
     questions.forEach((q, i) => {
@@ -784,23 +896,19 @@
   }
 
   function parseJson(text) {
-    // Strip markdown fences
     let clean = String(text || '')
       .replace(/```json[\s\S]*?```/gi, s => s.replace(/```json/gi, '').replace(/```/g, ''))
       .replace(/```/g, '')
       .trim();
 
-    // Try direct parse first
     try { return JSON.parse(clean); } catch (_) {}
 
-    // Try extracting array
     const arrStart = clean.indexOf('[');
     const arrEnd = clean.lastIndexOf(']');
     if (arrStart >= 0 && arrEnd > arrStart) {
       try { return JSON.parse(clean.slice(arrStart, arrEnd + 1)); } catch (_) {}
     }
 
-    // Extract individual JSON objects using brace-counting (handles broken arrays)
     const objects = [];
     let depth = 0;
     let start = -1;
@@ -815,9 +923,7 @@
             const obj = JSON.parse(clean.slice(start, i + 1));
             if (obj && typeof obj.qIndex !== 'undefined') objects.push(obj);
           } catch (_) {
-            // Try to salvage with basic key extraction
-            const fragment = clean.slice(start, i + 1);
-            const salvaged = salvageObject(fragment);
+            const salvaged = salvageObject(clean.slice(start, i + 1));
             if (salvaged) objects.push(salvaged);
           }
           start = -1;
@@ -829,7 +935,6 @@
     throw new Error('Gemini returned invalid JSON. Preview: ' + clean.slice(0, 200));
   }
 
-  // Last-resort: extract known keys from a broken JSON object string
   function salvageObject(fragment) {
     try {
       const get = (key, isArray) => {
@@ -858,8 +963,8 @@
   }
 
   function callGeminiParts(parts) {
-    if (!config.apiKey) throw new Error('API key missing. Open ⚙️ Setup and save it.');
-    const preferred = config.model || 'gemini-2.5-flash-lite';
+    if (!config.apiKey) throw new Error('Немає API ключа. Відкрийте ⚙️ Setup та збережіть ключ.');
+    const preferred = getActiveModel();
     const models = [preferred].concat(FALLBACK_MODELS.filter(m => m !== preferred));
     return callGeminiWithFallback(parts, models, []);
   }
@@ -883,7 +988,7 @@
               const msg = (data.error && data.error.message) ? data.error.message : 'HTTP ' + res.status;
               const retry = res.status === 429 || res.status === 503 || /quota|overload|try again/i.test(msg);
               if (retry && models.length > 1) {
-                setStatus(current + ' busy → trying ' + models[1] + '…', 'info');
+                setStatus(current + ' зайнята → пробую ' + models[1] + '…', 'info');
                 callGeminiWithFallback(parts, models.slice(1), errors.concat(current + ': ' + msg)).then(resolve, reject);
                 return;
               }
@@ -892,20 +997,20 @@
             }
             const rParts = data.candidates && data.candidates[0] && data.candidates[0].content && data.candidates[0].content.parts;
             const text = Array.isArray(rParts) ? rParts.map(p => p.text || '').join('\n') : '';
-            if (!text) { reject(new Error('Gemini returned empty response.')); return; }
+            if (!text) { reject(new Error('Gemini повернув пусту відповідь.')); return; }
             const parsed = parseJson(text);
             resolve(Array.isArray(parsed) ? parsed : [parsed]);
           } catch (err) { reject(err); }
         },
         onerror() {
           if (models.length > 1) {
-            setStatus(current + ' network error → trying ' + models[1] + '…', 'info');
+            setStatus(current + ' помилка мережі → ' + models[1] + '…', 'info');
             callGeminiWithFallback(parts, models.slice(1), errors.concat(current + ': network error')).then(resolve, reject);
             return;
           }
           reject(new Error(errors.concat(current + ': network error').join(' | ')));
         },
-        ontimeout() { reject(new Error('Request timed out.')); },
+        ontimeout() { reject(new Error('Запит перевищив час очікування.')); },
       });
     });
   }
@@ -956,9 +1061,8 @@
   // ─── Caching-aware batch analysis ─────────────────────────────────────────
   async function analyzeQuestionBatches(questions) {
     const allAnswers = [];
-    const toFetch = []; // { question, originalIndex }
+    const toFetch = [];
 
-    // Serve from cache first
     questions.forEach((q, i) => {
       const cached = getCached(q.text);
       if (cached) {
@@ -975,31 +1079,26 @@
         const chunk = qs.slice(i, i + chunkSize);
         const total = Math.ceil(qs.length / chunkSize);
         const cur = Math.floor(i / chunkSize) + 1;
-        setStatus('Analyzing batch ' + cur + '/' + total + ' (' + (allAnswers.filter(a => a._cached).length) + ' from cache)…', 'info');
+        setStatus('Аналізую батч ' + cur + '/' + total + ' (модель: ' + getActiveModel() + ')…', 'info');
         const parts = await buildBatchParts(chunk, i);
         const chunkAnswers = await callGeminiParts(parts);
         chunkAnswers.forEach((ans, ci) => {
           const origIdx = toFetch[i + ci] ? toFetch[i + ci].originalIndex : i + ci;
           const correctedAns = Object.assign({}, ans, { qIndex: origIdx + 1 });
           allAnswers.push(correctedAns);
-          // Save to cache
           const qText = qs[i + ci] && qs[i + ci].text;
           if (qText) setCached(qText, { correctOptions: ans.correctOptions, answerText: ans.answerText, explanation: ans.explanation, confidence: ans.confidence });
         });
       }
     }
 
-    // Update cache count badge
     document.getElementById('ath-cache-count').textContent = String(Object.keys(answerCache).length);
-
     return allAnswers.sort((a, b) => (Number(a.qIndex) || 0) - (Number(b.qIndex) || 0));
   }
 
   // ─── Auto-select ──────────────────────────────────────────────────────────
   function doAutoSelect() {
     if (!lastQuestions.length) return;
-
-    // Collect answers we have (from rendered cards)
     const results = document.getElementById('ath-results');
     if (!results) return;
     const cards = Array.from(results.querySelectorAll('.ath-card'));
@@ -1019,17 +1118,9 @@
         const optIdx = letter.charCodeAt(0) - 65;
         const opt = q.options[optIdx];
         if (!opt) return;
-
-        // Try clicking the element stored in option
         if (opt.element) {
-          try {
-            opt.element.click();
-            selected++;
-            return;
-          } catch (_) {}
+          try { opt.element.click(); selected++; return; } catch (_) {}
         }
-
-        // Fallback: find by text
         const allInputs = Array.from(document.querySelectorAll(
           'input[type="radio"], input[type="checkbox"], label, button, [role="radio"], [role="checkbox"]'
         )).filter(el => !el.closest('#ath-panel'));
@@ -1038,7 +1129,7 @@
       });
     });
 
-    setStatus(selected ? '⚡ Auto-selected ' + selected + ' answer(s)!' : 'Could not auto-select (no clickable elements found).', selected ? 'ok' : 'err');
+    setStatus(selected ? '⚡ Автовибрано ' + selected + ' відповідь(ей)!' : 'Не вдалося натиснути елементи.', selected ? 'ok' : 'err');
   }
 
   // ─── Analyze ──────────────────────────────────────────────────────────────
@@ -1047,16 +1138,16 @@
     const btn = document.getElementById('ath-analyze');
     const questions = lastQuestions.length ? lastQuestions : scan();
     if (!questions.length) {
-      setStatus('No questions found. Scroll the form so questions are visible, then Scan.', 'err');
+      setStatus('Питань не знайдено. Прокрутіть сторінку та натисніть Scan.', 'err');
       return;
     }
     btn.disabled = true;
-    setStatus('Sending ' + questions.length + ' question(s) to Gemini…', 'info');
+    setStatus('Надсилаю ' + questions.length + ' питань до Gemini (' + getActiveModel() + ')…', 'info');
     try {
       const answers = await analyzeQuestionBatches(questions);
       renderAnswers(questions, answers);
       const cachedCount = answers.filter(a => a._cached).length;
-      setStatus('✅ Done! ' + answers.length + ' answers (' + cachedCount + ' from cache)', 'ok');
+      setStatus('✅ Готово! ' + answers.length + ' відповідей (' + cachedCount + ' з кешу)', 'ok');
       switchTab('answers');
       if (config.autoSelect) doAutoSelect();
     } catch (err) {
@@ -1077,7 +1168,7 @@
     if (!pct) return null;
     const cls = pct >= 80 ? 'ath-conf-high' : pct >= 55 ? 'ath-conf-mid' : 'ath-conf-low';
     const emoji = pct >= 80 ? '🟢' : pct >= 55 ? '🟡' : '🔴';
-    return make('span', { className: 'ath-confidence ' + cls }, emoji + ' ' + pct + '% confident');
+    return make('span', { className: 'ath-confidence ' + cls }, emoji + ' ' + pct + '%');
   }
 
   function renderAnswers(questions, answers) {
@@ -1091,7 +1182,7 @@
 
       const titleRow = make('div', {});
       titleRow.appendChild(document.createTextNode((ans.qIndex || '?') + '. ' + q.text));
-      if (ans._cached) titleRow.appendChild(make('span', { className: 'ath-cached-badge' }, '📦 cached'));
+      if (ans._cached) titleRow.appendChild(make('span', { className: 'ath-cached-badge' }, '📦 кеш'));
       card.appendChild(titleRow);
 
       const summary = ans.answerText || letters.join(', ') || (ans.correctOptions || []).join(', ');
@@ -1107,11 +1198,10 @@
       if (ans.explanation) card.appendChild(make('div', { className: 'ath-explain' }, '💡 ' + ans.explanation));
       results.appendChild(card);
     });
-    if (!answers.length) results.appendChild(make('div', { className: 'ath-card ath-muted' }, 'No answers returned.'));
+    if (!answers.length) results.appendChild(make('div', { className: 'ath-card ath-muted' }, 'Відповідей немає.'));
   }
 
   // ─── Auto-mode engine ─────────────────────────────────────────────────────
-
   function questionFingerprint(questions) {
     return questions.map(q => q.text.slice(0, 60)).join('|');
   }
@@ -1120,67 +1210,51 @@
     const row = document.getElementById('ath-automode-row');
     const label = document.getElementById('ath-automode-label');
     if (row) row.classList.toggle('active', active);
-    if (label) label.textContent = active ? '🤖 Auto-mode: ON — ' + (statusText || 'watching…') : '🤖 Auto-mode: OFF';
+    if (label) label.textContent = active ? '🤖 Auto-mode: ON — ' + (statusText || 'спостерігаю…') : '🤖 Auto-mode: OFF';
   }
 
   async function autoModeTick() {
     if (autoModeBusy) return;
-    if (!config.apiKey) { setAutoModeUI(true, '⚠️ No API key!'); return; }
+    if (!config.apiKey) { setAutoModeUI(true, '⚠️ Немає API ключа!'); return; }
 
     const questions = getPageQuestions();
     if (!questions.length) return;
 
     const fp = questionFingerprint(questions);
-    if (fp === lastQuestionFingerprint) return; // same page, nothing new
+    if (fp === lastQuestionFingerprint) return;
 
     lastQuestionFingerprint = fp;
     lastQuestions = questions;
     document.getElementById('ath-count').textContent = String(questions.length);
 
     autoModeBusy = true;
-    setAutoModeUI(true, 'analyzing…');
+    setAutoModeUI(true, 'аналізую…');
 
     try {
       const answers = await analyzeQuestionBatches(questions);
       renderAnswers(questions, answers);
       const cachedCount = answers.filter(a => a._cached).length;
-      setStatus('🤖 Auto: ' + answers.length + ' answers (' + cachedCount + ' cached)', 'ok');
-      setAutoModeUI(true, 'done ✓');
-      // Always auto-select in auto-mode
+      setStatus('🤖 Авто: ' + answers.length + ' відповідей (' + cachedCount + ' кеш)', 'ok');
+      setAutoModeUI(true, 'готово ✓');
       doAutoSelectFromAnswers(questions, answers);
     } catch (err) {
-      setStatus('Auto-mode error: ' + err.message, 'err');
-      setAutoModeUI(true, '⚠️ error');
-      console.error('[AI Test Helper auto-mode error]', err);
+      setStatus('Помилка авто-режиму: ' + err.message, 'err');
+      setAutoModeUI(true, '⚠️ помилка');
     } finally {
       autoModeBusy = false;
-      // Reset label back to watching after a few seconds
-      setTimeout(() => { if (config.autoMode) setAutoModeUI(true, 'watching…'); }, 4000);
+      setTimeout(() => { if (config.autoMode) setAutoModeUI(true, 'спостерігаю…'); }, 4000);
     }
   }
 
   function startAutoMode() {
-    stopAutoMode(); // clear any existing
-    setAutoModeUI(true, 'watching…');
-
-    // Run immediately on first start
+    stopAutoMode();
+    setAutoModeUI(true, 'спостерігаю…');
     setTimeout(autoModeTick, 800);
-
-    // Watch DOM for new questions appearing (Naurok loads next question dynamically)
     autoModeObserver = new MutationObserver(() => {
       clearTimeout(autoModeTimer);
-      // Debounce: wait 600ms after last DOM change before triggering
       autoModeTimer = setTimeout(autoModeTick, 600);
     });
-
-    autoModeObserver.observe(document.body, {
-      childList: true,
-      subtree: true,
-      characterData: false,
-      attributes: false,
-    });
-
-    console.info('[AI Test Helper] Auto-mode started');
+    autoModeObserver.observe(document.body, { childList: true, subtree: true, characterData: false, attributes: false });
   }
 
   function stopAutoMode() {
@@ -1189,10 +1263,8 @@
     autoModeBusy = false;
     lastQuestionFingerprint = '';
     setAutoModeUI(false);
-    console.info('[AI Test Helper] Auto-mode stopped');
   }
 
-  // Variant of doAutoSelect that works directly from answers array (no DOM card parsing needed)
   function doAutoSelectFromAnswers(questions, answers) {
     let selected = 0;
     answers.forEach(ans => {
@@ -1200,18 +1272,13 @@
       if (!q) return;
       const letters = normalizeLetters(ans);
       if (!letters.length) return;
-
       letters.forEach(letter => {
         const optIdx = letter.charCodeAt(0) - 65;
         const opt = q.options[optIdx];
         if (!opt) return;
-
-        // Try stored element reference first
         if (opt.element) {
           try { opt.element.click(); selected++; return; } catch (_) {}
         }
-
-        // Fallback: search DOM by text
         const allInputs = Array.from(document.querySelectorAll(
           'input[type="radio"], input[type="checkbox"], label, button, [role="radio"], [role="checkbox"]'
         )).filter(el => !el.closest('#ath-panel'));
@@ -1219,7 +1286,7 @@
         if (match) { match.click(); selected++; }
       });
     });
-    if (selected) setStatus('⚡ Auto-selected ' + selected + ' answer(s)', 'ok');
+    if (selected) setStatus('⚡ Автовибрано ' + selected + ' відповідь(ей)', 'ok');
   }
 
   // ─── Init ─────────────────────────────────────────────────────────────────
